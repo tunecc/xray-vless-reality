@@ -15,5 +15,4 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 
 # 原项目：https://github.com/crazypeace/xray-vless-reality
 
-修改一些参数自用
-
+# 我修改了一些参数自用

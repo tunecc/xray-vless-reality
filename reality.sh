@@ -491,7 +491,7 @@ echo "---------- VLESS Reality URL ----------"
 if [[ $netstack == "6" ]]; then
   ip=[$ip]
 fi
-vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&real-$(hostname)"
+vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&#eal-$(hostname)"
 echo -e "${cyan}${vless_reality_url}${none}"
 echo
 
