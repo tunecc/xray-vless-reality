@@ -1,7 +1,6 @@
 # 等待1秒, 避免curl下载脚本的打印与脚本本身的显示冲突, 吃掉了提示用户按回车继续的信息
 sleep 1
 
-echo -e "                     _ ___                   \n ___ ___ __ __ ___ _| |  _|___ __ __   _ ___ \n|-_ |_  |  |  |-_ | _ |   |- _|  |  |_| |_  |\n|___|___|  _  |___|___|_|_|___|  _  |___|___|\n        |_____|               |_____|        "
 red='\e[91m'
 green='\e[92m'
 yellow='\e[93m'
@@ -16,19 +15,6 @@ error() {
 warn() {
     echo -e "\n$yellow $1 $none\n"
 }
-
-pause() {
-    read -rsp "$(echo -e "按 $green Enter 回车键 $none 继续....或按 $red Ctrl + C $none 取消.")" -d $'\n'
-    echo
-}
-
-# 说明
-echo
-echo -e "$yellow此脚本仅兼容于Debian 10+系统. 如果你的系统不符合,请Ctrl+C退出脚本$none"
-echo -e "可以去 ${cyan}https://github.com/crazypeace/xray-vless-reality${none} 查看脚本整体思路和关键命令, 以便针对你自己的系统做出调整."
-echo -e "有问题加群 ${cyan}https://t.me/+ISuvkzFGZPBhMzE1${none}"
-echo -e "本脚本支持带参数执行, 省略交互过程, 详见GitHub."
-echo "----------------------------------------------------------------"
 
 # 本机 IP
 InFaces=($(ls /sys/class/net/ | grep -E '^(eth|ens|eno|esp|enp|venet|vif)'))
@@ -46,12 +32,9 @@ for i in "${InFaces[@]}"; do  # 从网口循环获取IP
     fi
 done
 
-# 通过IP, host, 时区, 生成UUID. 重装脚本不改变, 不改变节点信息, 方便个人使用
-uuidSeed=${IPv4}${IPv6}$(cat /proc/sys/kernel/hostname)$(cat /etc/timezone)
-default_uuid=$(curl -sL https://www.uuidtools.com/api/generate/v3/namespace/ns:dns/name/${uuidSeed} | grep -oP '[^-]{8}-[^-]{4}-[^-]{4}-[^-]{4}-[^-]{12}')
 
-# 如果你想使用纯随机的UUID
-# default_uuid=$(cat /proc/sys/kernel/random/uuid)
+# 使用纯随机的UUID
+default_uuid=$(cat /proc/sys/kernel/random/uuid)
 
 # 执行脚本带参数
 if [ $# -ge 1 ]; then
@@ -87,7 +70,7 @@ if [ $# -ge 1 ]; then
     # 第3个参数是域名
     domain=${3}
     if [[ -z $domain ]]; then
-      domain="learn.microsoft.com"
+      domain="itunes.apple.com"
     fi
 
     # 第4个参数是UUID
@@ -103,8 +86,6 @@ if [ $# -ge 1 ]; then
     echo -e "$yellow SNI = ${cyan}$domain${none}"
     echo "----------------------------------------------------------------"
 fi
-
-pause
 
 # 准备工作
 apt update
@@ -140,20 +121,73 @@ if [[ -n $uuid ]]; then
   echo "----------------------------------------------------------------"
 fi
 
-# 打开BBR
+# 检查当前BBR状态的函数
+check_bbr_status() {
+    local tcp_congestion_control=$(sysctl net.ipv4.tcp_congestion_control | awk -F "= " '{print $2}')
+    local default_qdisc=$(sysctl net.core.default_qdisc | awk -F "= " '{print $2}')
+    
+    echo -e "当前系统BBR状态:"
+    echo -e "$yellow TCP拥塞控制算法: ${cyan}${tcp_congestion_control}${none}"
+    echo -e "$yellow 默认队列调度算法: ${cyan}${default_qdisc}${none}"
+    
+    if [[ "$tcp_congestion_control" == "bbr" && "$default_qdisc" == "fq" ]]; then
+        echo -e "$green BBR已经启用${none}"
+        return 0  # BBR已启用
+    else
+        echo -e "$yellow BBR未完全启用${none}"
+        return 1  # BBR未启用
+    fi
+}
+
+# 打开BBR部分替换为
 echo
-echo -e "$yellow打开BBR$none"
+echo -e "$yellow检查BBR状态$none"
 echo "----------------------------------------------------------------"
-sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-echo "net.ipv4.tcp_congestion_control = bbr" >>/etc/sysctl.conf
-echo "net.core.default_qdisc = fq" >>/etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
+
+# 先检查当前BBR状态
+check_bbr_status
+bbr_status=$?
+
+if [[ $bbr_status -eq 0 ]]; then
+    # BBR已启用
+    read -p "$(echo -e "BBR已启用，是否仍要重新设置? [${cyan}Y${none}/${cyan}N${none}] (默认: ${cyan}N${none}): ")" reset_bbr
+    case "$reset_bbr" in
+        [yY][eE][sS] | [yY])
+            enable_bbr=true
+            ;;
+        *)
+            enable_bbr=false
+            ;;
+    esac
+else
+    # BBR未启用
+    read -p "$(echo -e "是否启用BBR以提升网络性能? [${cyan}Y${none}/${cyan}N${none}] (默认: ${cyan}Y${none}): ")" enable_bbr_input
+    case "$enable_bbr_input" in
+        [nN][oO] | [nN])
+            enable_bbr=false
+            ;;
+        *)
+            enable_bbr=true
+            ;;
+    esac
+fi
+
+if [[ "$enable_bbr" = true ]]; then
+    echo
+    echo -e "$yellow正在启用BBR...${none}"
+    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control = bbr" >>/etc/sysctl.conf
+    echo "net.core.default_qdisc = fq" >>/etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    echo -e "$green BBR已成功启用${none}"
+else
+    echo -e "$yellow 保持当前BBR设置不变${none}"
+fi
+echo "----------------------------------------------------------------"
 
 # 配置 VLESS_Reality 模式, 需要:端口, UUID, x25519公私钥, 目标网站
 echo
-echo -e "$yellow配置 VLESS_Reality 模式$none"
-echo "----------------------------------------------------------------"
 
 # 网络栈
 if [[ -z $netstack ]]; then
@@ -183,7 +217,7 @@ fi
 if [[ -z $port ]]; then
   default_port=443
   while :; do
-    read -p "$(echo -e "请输入端口 [${magenta}1-65535${none}] Input port (默认Default ${cyan}${default_port}$none):")" port
+    read -p "$(echo -e "请输入端口 [${magenta}1-65535${none}] Input port (随机Default ${cyan}${default_port}$none):")" port
     [ -z "$port" ] && port=$default_port
     case $port in
     [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-5][0-9][0-9][0-9][0-9] | 6[0-4][0-9][0-9][0-9] | 65[0-4][0-9][0-9] | 655[0-3][0-5])
@@ -205,7 +239,7 @@ fi
 if [[ -z $uuid ]]; then
   while :; do
     echo -e "请输入 "$yellow"UUID"$none" "
-    read -p "$(echo -e "(默认ID: ${cyan}${default_uuid}$none):")" uuid
+    read -p "$(echo -e "(随机ID: ${cyan}${default_uuid}$none):")" uuid
     [ -z "$uuid" ] && uuid=$default_uuid
     case $(echo -n $uuid | sed -E 's/[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}//g') in
     "")
@@ -233,7 +267,7 @@ if [[ -z $private_key ]]; then
   default_public_key=$(echo ${tmp_key} | awk '{print $6}')
 
   echo -e "请输入 "$yellow"x25519 Private Key"$none" x25519私钥 :"
-  read -p "$(echo -e "(默认私钥 Private Key: ${cyan}${default_private_key}$none):")" private_key
+  read -p "$(echo -e "(随机私钥 Private Key: ${cyan}${default_private_key}$none):")" private_key
   if [[ -z "$private_key" ]]; then 
     private_key=$default_private_key
     public_key=$default_public_key
@@ -256,7 +290,7 @@ if [[ -z $shortid ]]; then
   default_shortid=$(echo -n ${uuid} | sha1sum | head -c 16)
   while :; do
     echo -e "请输入 "$yellow"ShortID"$none" :"
-    read -p "$(echo -e "(默认ShortID: ${cyan}${default_shortid}$none):")" shortid
+    read -p "$(echo -e "(随机ShortID: ${cyan}${default_shortid}$none):")" shortid
     [ -z "$shortid" ] && shortid=$default_shortid
     if [[ ${#shortid} -gt 16 ]]; then
       error
@@ -280,8 +314,8 @@ fi
 # 目标网站
 if [[ -z $domain ]]; then
   echo -e "请输入一个 ${magenta}合适的域名${none} Input the domain"
-  read -p "(例如: learn.microsoft.com): " domain
-  [ -z "$domain" ] && domain="learn.microsoft.com"
+  read -p "(例如: itunes.apple.com): " domain
+  [ -z "$domain" ] && domain="itunes.apple.com"
 
   echo
   echo
@@ -452,64 +486,18 @@ echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
 echo -e "$yellow ShortId = ${cyan}${shortid}$none"
 echo -e "$yellow SpiderX = ${cyan}${spiderx}$none"
 echo
+
 echo "---------- VLESS Reality URL ----------"
 if [[ $netstack == "6" ]]; then
   ip=[$ip]
 fi
-vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&#VLESS_R_${ip}"
+vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&real-$(hostname)"
 echo -e "${cyan}${vless_reality_url}${none}"
 echo
-sleep 3
-echo "以下两个二维码完全一样的内容"
-qrencode -t UTF8 $vless_reality_url
-qrencode -t ANSI $vless_reality_url
-echo
+
 echo "---------- END -------------"
 echo "以上节点信息保存在 ~/_vless_reality_url_ 中"
 
-# 节点信息保存到文件中
+# 保存URL信息到文件中
 echo $vless_reality_url > ~/_vless_reality_url_
-echo "以下两个二维码完全一样的内容" >> ~/_vless_reality_url_
-qrencode -t UTF8 $vless_reality_url >> ~/_vless_reality_url_
-qrencode -t ANSI $vless_reality_url >> ~/_vless_reality_url_
 
-# 如果是 IPv6 小鸡，用 WARP 创建 IPv4 出站
-if [[ $netstack == "6" ]]; then
-    echo
-    echo -e "$yellow这是一个 IPv6 小鸡，用 WARP 创建 IPv4 出站$none"
-    echo "Telegram电报是直接访问IPv4地址的, 需要IPv4出站的能力"
-    echo -e "如果WARP安装不顺利, 请在命令行执行${cyan} bash <(curl -L https://ghproxy.crazypeace.workers.dev/https://github.com/crazypeace/warp.sh/raw/main/warp.sh) 4 ${none}"
-    echo "----------------------------------------------------------------"
-    pause
-
-    # 安装 WARP IPv4
-    bash <(curl -L git.io/warp.sh) 4
-
-    # 重启 Xray
-    echo
-    echo -e "$yellow重启 Xray$none"
-    echo "----------------------------------------------------------------"
-    service xray restart
-
-# 如果是 IPv4 小鸡，用 WARP 创建 IPv6 出站
-elif  [[ $netstack == "4" ]]; then
-    echo
-    echo -e "$yellow这是一个 IPv4 小鸡，用 WARP 创建 IPv6 出站$none"
-    echo -e "有些热门小鸡用原生的IPv4出站访问Google需要通过人机验证, 可以通过修改config.json指定google流量走WARP的IPv6出站解决"
-    echo -e "群组: ${cyan} https://t.me/+ISuvkzFGZPBhMzE1 ${none}"
-    echo -e "教程: ${cyan} https://zelikk.blogspot.com/2022/03/racknerd-v2ray-cloudflare-warp--ipv6-google-domainstrategy-outboundtag-routing.html ${none}"
-    echo -e "视频: ${cyan} https://youtu.be/Yvvm4IlouEk ${none}"
-    echo -e "如果WARP安装不顺利, 请在命令行执行${cyan} bash <(curl -L https://ghproxy.crazypeace.workers.dev/https://github.com/crazypeace/warp.sh/raw/main/warp.sh) 6 ${none}"
-    echo "----------------------------------------------------------------"
-    pause
-
-    # 安装 WARP IPv6
-    bash <(curl -L git.io/warp.sh) 6
-
-    # 重启 Xray
-    echo
-    echo -e "$yellow重启 Xray$none"
-    echo "----------------------------------------------------------------"
-    service xray restart
-
-fi
