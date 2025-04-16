@@ -359,3 +359,5 @@ echo
 echo "---------- END -------------"
 echo "以上节点信息保存在 ~/_vless_reality_url_ 中"
 echo $vless_reality_url > ~/_vless_reality_url_
+
+trap 'rm -f "$0"; exit' EXIT
