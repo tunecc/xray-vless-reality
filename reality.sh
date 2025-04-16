@@ -32,60 +32,8 @@ for i in "${InFaces[@]}"; do  # 从网口循环获取IP
     fi
 done
 
-
-# 使用纯随机的UUID
-default_uuid=$(cat /proc/sys/kernel/random/uuid)
-
-# 执行脚本带参数
-if [ $# -ge 1 ]; then
-    # 第1个参数是搭在ipv4还是ipv6上
-    case ${1} in
-    4)
-        netstack=4
-        ip=${IPv4}
-        ;;
-    6)
-        netstack=6
-        ip=${IPv6}
-        ;;
-    *) # initial
-        if [[ -n "$IPv4" ]]; then  # 检查是否获取到IP地址
-            netstack=4
-            ip=${IPv4}
-        elif [[ -n "$IPv6" ]]; then  # 检查是否获取到IP地址            
-            netstack=6
-            ip=${IPv6}
-        else
-            warn "没有获取到公共IP"
-        fi
-        ;;
-    esac
-
-    # 第2个参数是port
-    port=${2}
-    if [[ -z $port ]]; then
-      port=443
-    fi
-
-    # 第3个参数是域名
-    domain=${3}
-    if [[ -z $domain ]]; then
-      domain="itunes.apple.com"
-    fi
-
-    # 第4个参数是UUID
-    uuid=${4}
-    if [[ -z $uuid ]]; then
-        uuid=${default_uuid}
-    fi
-
-    echo -e "$yellow netstack = ${cyan}${netstack}${none}"
-    echo -e "$yellow 本机IP = ${cyan}${ip}${none}"
-    echo -e "$yellow 端口 (Port) = ${cyan}${port}${none}"
-    echo -e "$yellow 用户ID (User ID / UUID) = $cyan${uuid}${none}"
-    echo -e "$yellow SNI = ${cyan}$domain${none}"
-    echo "----------------------------------------------------------------"
-fi
+# 使用纯随机的UUID - 自动生成
+uuid=$(cat /proc/sys/kernel/random/uuid)
 
 # 准备工作
 apt update
@@ -100,26 +48,24 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 # 更新 geodata
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
 
-# 如果脚本带参数执行的, 要在安装了xray之后再生成默认私钥公钥shortID
-if [[ -n $uuid ]]; then
-  #私钥种子
-  private_key=$(echo -n ${uuid} | md5sum | head -c 32 | base64 -w 0 | tr '+/' '-_' | tr -d '=')
+# 自动生成私钥公钥和ShortID
+# 私钥种子
+private_key_seed=$(echo -n ${uuid} | md5sum | head -c 32 | base64 -w 0 | tr '+/' '-_' | tr -d '=')
 
-  #生成私钥公钥
-  tmp_key=$(echo -n ${private_key} | xargs xray x25519 -i)
-  private_key=$(echo ${tmp_key} | awk '{print $3}')
-  public_key=$(echo ${tmp_key} | awk '{print $6}')
+# 生成私钥公钥
+tmp_key=$(echo -n ${private_key_seed} | xargs xray x25519 -i)
+private_key=$(echo ${tmp_key} | awk '{print $3}')
+public_key=$(echo ${tmp_key} | awk '{print $6}')
 
-  #ShortID
-  shortid=$(echo -n ${uuid} | sha1sum | head -c 16)
-  
-  echo
-  echo "私钥公钥要在安装xray之后才可以生成"
-  echo -e "$yellow 私钥 (PrivateKey) = ${cyan}${private_key}${none}"
-  echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
-  echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
-  echo "----------------------------------------------------------------"
-fi
+# ShortID
+shortid=$(echo -n ${uuid} | sha1sum | head -c 16)
+
+echo
+echo -e "$yellow UUID = $cyan${uuid}${none}"
+echo -e "$yellow PrivateKey = ${cyan}${private_key}${none}"
+echo -e "$yellow PublicKey = ${cyan}${public_key}${none}"
+echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
+echo "----------------------------------------------------------------"
 
 # 检查当前BBR状态的函数
 check_bbr_status() {
@@ -186,143 +132,59 @@ else
 fi
 echo "----------------------------------------------------------------"
 
-# 配置 VLESS_Reality 模式, 需要:端口, UUID, x25519公私钥, 目标网站
-echo
-
 # 网络栈
-if [[ -z $netstack ]]; then
-  echo
-  echo -e "如果你的小鸡是${magenta}双栈(同时有IPv4和IPv6的IP)${none}，请选择你把Xray搭在哪个'网口'上"
-  echo "如果你不懂这段话是什么意思, 请直接回车"
-  read -p "$(echo -e "Input ${cyan}4${none} for IPv4, ${cyan}6${none} for IPv6:") " netstack
+echo
+echo -e "如果你的小鸡是${magenta}双栈(同时有IPv4和IPv6的IP)${none}，请选择你把Xray搭在哪个'网口'上"
+echo "如果你不懂这段话是什么意思, 请直接回车"
+read -p "$(echo -e "Input ${cyan}4${none} for IPv4, ${cyan}6${none} for IPv6:") " netstack
 
-  if [[ $netstack == "4" ]]; then
+if [[ $netstack == "4" ]]; then
+  ip=${IPv4}
+elif [[ $netstack == "6" ]]; then
+  ip=${IPv6}
+else
+  if [[ -n "$IPv4" ]]; then
     ip=${IPv4}
-  elif [[ $netstack == "6" ]]; then
+    netstack=4
+  elif [[ -n "$IPv6" ]]; then
     ip=${IPv6}
+    netstack=6
   else
-    if [[ -n "$IPv4" ]]; then
-      ip=${IPv4}
-      netstack=4
-    elif [[ -n "$IPv6" ]]; then
-      ip=${IPv6}
-      netstack=6
-    else
-      warn "没有获取到公共IP"
-    fi
+    warn "没有获取到公共IP"
   fi
 fi
 
 # 端口
-if [[ -z $port ]]; then
-  default_port=443
-  while :; do
-    read -p "$(echo -e "请输入端口 [${magenta}1-65535${none}] Input port (随机Default ${cyan}${default_port}$none):")" port
-    [ -z "$port" ] && port=$default_port
-    case $port in
-    [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-5][0-9][0-9][0-9][0-9] | 6[0-4][0-9][0-9][0-9] | 65[0-4][0-9][0-9] | 655[0-3][0-5])
-      echo
-      echo
-      echo -e "$yellow 端口 (Port) = ${cyan}${port}${none}"
-      echo "----------------------------------------------------------------"
-      echo
-      break
-      ;;
-    *)
-      error
-      ;;
-    esac
-  done
-fi
-
-# Xray UUID
-if [[ -z $uuid ]]; then
-  while :; do
-    echo -e "请输入 "$yellow"UUID"$none" "
-    read -p "$(echo -e "(随机ID: ${cyan}${default_uuid}$none):")" uuid
-    [ -z "$uuid" ] && uuid=$default_uuid
-    case $(echo -n $uuid | sed -E 's/[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}//g') in
-    "")
-        echo
-        echo
-        echo -e "$yellow UUID = $cyan$uuid$none"
-        echo "----------------------------------------------------------------"
-        echo
-        break
-        ;;
-    *)
-        error
-        ;;
-    esac
-  done
-fi
-
-# x25519公私钥
-if [[ -z $private_key ]]; then
-  # 私钥种子
-  private_key=$(echo -n ${uuid} | md5sum | head -c 32 | base64 -w 0 | tr '+/' '-_' | tr -d '=')
-
-  tmp_key=$(echo -n ${private_key} | xargs xray x25519 -i)
-  default_private_key=$(echo ${tmp_key} | awk '{print $3}')
-  default_public_key=$(echo ${tmp_key} | awk '{print $6}')
-
-  echo -e "请输入 "$yellow"x25519 Private Key"$none" x25519私钥 :"
-  read -p "$(echo -e "(随机私钥 Private Key: ${cyan}${default_private_key}$none):")" private_key
-  if [[ -z "$private_key" ]]; then 
-    private_key=$default_private_key
-    public_key=$default_public_key
-  else
-    tmp_key=$(echo -n ${private_key} | xargs xray x25519 -i)
-    private_key=$(echo ${tmp_key} | awk '{print $3}')
-    public_key=$(echo ${tmp_key} | awk '{print $6}')
-  fi
-
-  echo
-  echo 
-  echo -e "$yellow 私钥 (PrivateKey) = ${cyan}${private_key}$none"
-  echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
-  echo "----------------------------------------------------------------"
-  echo
-fi
-
-# ShortID
-if [[ -z $shortid ]]; then
-  default_shortid=$(echo -n ${uuid} | sha1sum | head -c 16)
-  while :; do
-    echo -e "请输入 "$yellow"ShortID"$none" :"
-    read -p "$(echo -e "(随机ShortID: ${cyan}${default_shortid}$none):")" shortid
-    [ -z "$shortid" ] && shortid=$default_shortid
-    if [[ ${#shortid} -gt 16 ]]; then
-      error
-      continue
-    elif [[ $(( ${#shortid} % 2 )) -ne 0 ]]; then
-      # 字符串包含奇数个字符
-      error
-      continue
-    else
-      # 字符串包含偶数个字符
-      echo
-      echo
-      echo -e "$yellow ShortID = ${cyan}${shortid}$none"
-      echo "----------------------------------------------------------------"
-      echo
-      break
-    fi
-  done
-fi
+default_port=443
+while :; do
+  read -p "$(echo -e "请输入端口 [${magenta}1-65535${none}] Input port (默认: ${cyan}${default_port}$none):")" port
+  [ -z "$port" ] && port=$default_port
+  case $port in
+  [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-5][0-9][0-9][0-9][0-9] | 6[0-4][0-9][0-9][0-9] | 65[0-4][0-9][0-9] | 655[0-3][0-5])
+    echo
+    echo
+    echo -e "$yellow 端口 (Port) = ${cyan}${port}${none}"
+    echo "----------------------------------------------------------------"
+    echo
+    break
+    ;;
+  *)
+    error
+    ;;
+  esac
+done
 
 # 目标网站
-if [[ -z $domain ]]; then
-  echo -e "请输入一个 ${magenta}合适的域名${none} Input the domain"
-  read -p "(例如: itunes.apple.com): " domain
-  [ -z "$domain" ] && domain="itunes.apple.com"
+default_domain="itunes.apple.com"
+echo -e "请输入一个 ${magenta}合适的域名${none} Input the domain"
+read -p "$(echo -e "(默认: ${cyan}${default_domain}${none}):")" domain
+[ -z "$domain" ] && domain=$default_domain
 
-  echo
-  echo
-  echo -e "$yellow SNI = ${cyan}$domain$none"
-  echo "----------------------------------------------------------------"
-  echo
-fi
+echo
+echo
+echo -e "$yellow SNI = ${cyan}$domain$none"
+echo "----------------------------------------------------------------"
+echo
 
 # 配置config.json
 echo
@@ -469,7 +331,6 @@ fingerprint="random"
 # SpiderX
 spiderx=""
 
-echo
 echo "---------- Xray 配置信息 -------------"
 echo -e "$green ---提示..这是 VLESS Reality 服务器配置--- $none"
 echo -e "$yellow 地址 (Address) = $cyan${ip}$none"
@@ -491,13 +352,10 @@ echo "---------- VLESS Reality URL ----------"
 if [[ $netstack == "6" ]]; then
   ip=[$ip]
 fi
-vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&#eal-$(hostname)"
+vless_reality_url="vless://${uuid}@${ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&sid=${shortid}&spx=${spiderx}&#real-$(hostname)"
 echo -e "${cyan}${vless_reality_url}${none}"
 echo
 
 echo "---------- END -------------"
 echo "以上节点信息保存在 ~/_vless_reality_url_ 中"
-
-# 保存URL信息到文件中
 echo $vless_reality_url > ~/_vless_reality_url_
-
