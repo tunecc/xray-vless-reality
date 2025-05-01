@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # 等待1秒, 避免curl下载脚本的打印与脚本本身的显示冲突, 吃掉了提示用户按回车继续的信息
 sleep 1
 
@@ -15,6 +17,69 @@ error() {
 warn() {
     echo -e "\n$yellow $1 $none\n"
 }
+
+# 增强安装前检查
+check_system() {
+    echo
+    echo -e "${yellow}系统检查${none}"
+    echo "----------------------------------------------------------------"
+    
+    # 检查是否为root用户
+    if [ $(id -u) != "0" ]; then
+        echo -e "${red}错误: 必须使用root用户运行此脚本${none}"
+        exit 1
+    fi
+    
+    # 检查系统内存
+    MEM=$(free -m | awk '/^Mem:/{print $2}')
+    if [[ $MEM -lt 512 ]]; then
+        echo -e "${yellow}警告: 系统内存小于512MB，可能影响性能${none}"
+    fi
+    
+    # 检查系统架构
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64|amd64)
+            echo -e "系统架构: ${cyan}x86_64${none}"
+            ;;
+        aarch64|arm64)
+            echo -e "系统架构: ${cyan}ARM64${none}"
+            ;;
+        *)
+            echo -e "${yellow}警告: 未经测试的系统架构 $ARCH，可能不兼容${none}"
+            ;;
+    esac
+    
+    # 检查是否已经安装Xray
+    if systemctl is-active --quiet xray; then
+        echo -e "${yellow}警告: 检测到Xray已在运行，此脚本将覆盖现有配置${none}"
+        read -p "$(echo -e "是否继续? [${cyan}Y${none}/${cyan}N${none}] (默认: ${cyan}N${none}): ")" continue_install
+        case "$continue_install" in
+            [yY][eE][sS] | [yY])
+                echo -e "继续安装..."
+                ;;
+            *)
+                echo -e "安装已取消"
+                exit 0
+                ;;
+        esac
+    fi
+    
+    echo -e "${green}系统检查通过${none}"
+    echo
+}
+
+
+
+# 显示卸载信息
+show_uninstall_info() {
+    echo
+    echo -e "卸载: ${cyan}bash -c \"\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ remove${none}"
+    echo
+}
+
+# 执行系统检查
+check_system
 
 # 本机 IP
 InFaces=($(ls /sys/class/net/ | grep -E '^(eth|ens|eno|esp|enp|venet|vif)'))
@@ -36,14 +101,25 @@ done
 uuid=$(cat /proc/sys/kernel/random/uuid)
 
 # 准备工作
-apt update
-apt install -y curl sudo jq qrencode net-tools lsof
+echo -e "${yellow}准备安装必要软件包...${none}"
+if ! apt update; then
+    echo -e "${red}更新软件源失败，请检查网络${none}"
+    exit 1
+fi
+
+if ! apt install -y curl sudo jq qrencode net-tools lsof; then
+    echo -e "${red}安装必要软件包失败${none}"
+    exit 1
+fi
 
 # Xray官方脚本 安装最新版本
 echo
 echo -e "${yellow}Xray官方脚本安装最新版本$none"
 echo "----------------------------------------------------------------"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
+    echo -e "${red}Xray安装失败${none}"
+    exit 1
+fi
 
 # 更新 geodata
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
@@ -133,26 +209,65 @@ fi
 echo "----------------------------------------------------------------"
 
 # 网络栈
+# 显示检测到的IP地址
 echo
-echo -e "如果你的小鸡是${magenta}双栈(同时有IPv4和IPv6的IP)${none}，请选择你把Xray搭在哪个'网口'上"
-echo "如果你不懂这段话是什么意思, 请直接回车"
-read -p "$(echo -e "Input ${cyan}4${none} for IPv4, ${cyan}6${none} for IPv6:") " netstack
+echo -e "${yellow}系统检测${none}"
+echo "----------------------------------------------------------------"
+echo -e "检测到的IPv4地址: ${cyan}${IPv4:-未检测到}${none}"
+echo -e "检测到的IPv6地址: ${cyan}${IPv6:-未检测到}${none}"
+echo
 
-if [[ $netstack == "4" ]]; then
-  ip=${IPv4}
-elif [[ $netstack == "6" ]]; then
-  ip=${IPv6}
-else
-  if [[ -n "$IPv4" ]]; then
-    ip=${IPv4}
-    netstack=4
-  elif [[ -n "$IPv6" ]]; then
-    ip=${IPv6}
-    netstack=6
-  else
-    warn "没有获取到公共IP"
-  fi
-fi
+# 网络协议选择提示
+echo -e "${yellow}网络协议选择${none}"
+echo "----------------------------------------------------------------"
+echo -e "请选择要使用的网络协议:"
+echo -e "  ${cyan}0${none} - 自动选择 (优先IPv4，无IPv4时使用IPv6)"
+echo -e "  ${cyan}1${none} - IPv4 (推荐，兼容性更好)"
+echo -e "  ${cyan}2${none} - IPv6" 
+echo
+
+# 读取用户输入
+read -p "$(echo -e "请输入选项 [0-2] (默认: ${cyan}0${none}): ")" netstack_choice
+
+# 处理用户选择
+case "$netstack_choice" in
+    1)
+        if [[ -z "$IPv4" ]]; then
+            echo -e "\n${yellow}警告: 未检测到IPv4地址，将尝试使用IPv6${none}\n"
+            ip=${IPv6}
+            netstack=6
+        else
+            ip=${IPv4}
+            netstack=4
+        fi
+        ;;
+    2)
+        if [[ -z "$IPv6" ]]; then
+            echo -e "\n${yellow}警告: 未检测到IPv6地址，将尝试使用IPv4${none}\n"
+            ip=${IPv4}
+            netstack=4
+        else
+            ip=${IPv6}
+            netstack=6
+        fi
+        ;;
+    *)
+        # 自动选择 (默认)
+        if [[ -n "$IPv4" ]]; then
+            ip=${IPv4}
+            netstack=4
+        elif [[ -n "$IPv6" ]]; then
+            ip=${IPv6}
+            netstack=6
+        else
+            echo -e "\n${red}错误: 未检测到任何可用的网络地址${none}\n"
+            exit 1
+        fi
+        ;;
+esac
+
+echo -e "\n${yellow}已选择: ${cyan}IPv${netstack} (${ip})${none}\n"
+echo "----------------------------------------------------------------"
 
 # 端口
 default_port=443
@@ -173,6 +288,24 @@ while :; do
     ;;
   esac
 done
+
+# 指纹选择
+echo -e "${yellow}浏览器指纹选择${none}"
+echo "----------------------------------------------------------------"
+echo -e "  ${cyan}1${none} - random (默认)"
+echo -e "  ${cyan}2${none} - chrome"
+echo -e "  ${cyan}3${none} - firefox"
+echo -e "  ${cyan}4${none} - safari"
+read -p "$(echo -e "请选择浏览器指纹 [1-4] (默认: ${cyan}1${none}): ")" fp_choice
+case "$fp_choice" in
+    2) fingerprint="chrome" ;;
+    3) fingerprint="firefox" ;;
+    4) fingerprint="safari" ;;
+    *) fingerprint="random" ;;
+esac
+
+echo -e "\n${yellow}已选择: ${cyan}${fingerprint}${none}\n"
+echo "----------------------------------------------------------------"
 
 # 目标网站
 default_domain="itunes.apple.com"
@@ -216,7 +349,7 @@ cat > /usr/local/etc/xray/config.json <<-EOF
     //   }
     // },
     {
-      "listen": "0.0.0.0",
+      "listen": "::",
       "port": ${port},    // ***
       "protocol": "vless",
       "settings": {
@@ -323,10 +456,12 @@ EOF
 echo
 echo -e "$yellow重启 Xray$none"
 echo "----------------------------------------------------------------"
-service xray restart
-
-# 指纹FingerPrint
-fingerprint="random"
+if systemctl restart xray; then
+    echo -e "${green}Xray 重启成功${none}"
+else
+    echo -e "${red}Xray 重启失败，请检查配置${none}"
+    exit 1
+fi
 
 # SpiderX
 spiderx=""
@@ -359,5 +494,8 @@ echo
 echo "---------- END -------------"
 echo "以上节点信息保存在 ~/_vless_reality_url_ 中"
 echo $vless_reality_url > ~/_vless_reality_url_
+
+# 显示信息
+show_uninstall_info
 
 trap 'rm -f "$0"; exit' EXIT
