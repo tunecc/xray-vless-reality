@@ -74,7 +74,7 @@ check_system() {
 # 显示卸载信息
 show_uninstall_info() {
     echo
-    echo -e "卸载: ${cyan}bash -c \"\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ remove${none}"
+    echo -e "卸载: ${cyan}bash -c \"\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ remove --purge${none}"
     echo
 }
 
